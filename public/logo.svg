@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160">
+  <rect width="640" height="160" fill="#070706"/>
+  <text
+    x="320"
+    y="108"
+    text-anchor="middle"
+    fill="#f4efe6"
+    font-family="Fraunces, Iowan Old Style, Palatino, serif"
+    font-size="96"
+    font-weight="500"
+    letter-spacing="-2"
+  >JovianX</text>
+</svg>
