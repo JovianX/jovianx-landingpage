@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { crestFraction, planetRadius } from "../layout";
 
 function ring(
   ctx: CanvasRenderingContext2D,
@@ -52,19 +53,21 @@ function draw(
 ) {
   ctx.clearRect(0, 0, width, height);
   const cx = width / 2 + (px - 0.5) * width * 0.03;
-  const cy = height * 0.48 + (py - 0.5) * height * 0.03;
-  const reach = Math.min(width, height) * 0.55;
-  const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, reach);
-  glow.addColorStop(0, "rgba(255, 236, 206, 0.22)");
-  glow.addColorStop(0.28, "rgba(196, 154, 96, 0.08)");
+  const crest = height * crestFraction(width, height) + (py - 0.5) * height * 0.02;
+  const reach = Math.min(width, height) * 0.46;
+  const glow = ctx.createRadialGradient(cx, crest, 0, cx, crest, reach);
+  glow.addColorStop(0, "rgba(255, 236, 206, 0.14)");
+  glow.addColorStop(0.45, "rgba(196, 154, 96, 0.04)");
   glow.addColorStop(1, "rgba(196, 154, 96, 0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
 
-  const unit = Math.min(width, height);
+  const radius = planetRadius(width, height);
+  const pcx = width / 2;
+  const pcy = height;
   const turn = still ? 0.8 : now / 1000;
-  ring(ctx, width / 2, height * 0.48, unit * 0.46, unit * 0.17, -0.42, turn, 0.2, !still);
-  ring(ctx, width / 2, height * 0.48, unit * 0.56, unit * 0.22, 0.55, -turn * 0.65, 0.1, false);
+  ring(ctx, pcx, pcy, radius * 1.08, radius * 0.92, -0.1, turn, 0.16, !still);
+  ring(ctx, pcx, pcy, radius * 1.24, radius * 0.8, 0.16, -turn * 0.62, 0.08, false);
 
   if (still) return;
   const age = (now - born) / 1000;
@@ -72,7 +75,7 @@ function draw(
     const progress = age / 2.1;
     const eased = 1 - (1 - progress) ** 3;
     ctx.beginPath();
-    ctx.arc(width / 2, height * 0.48, eased * unit * 0.48, 0, Math.PI * 2);
+    ctx.arc(pcx, crest, eased * Math.min(width, height) * 0.3, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(255, 248, 236, ${0.7 * (1 - progress)})`;
     ctx.lineWidth = 1.4;
     ctx.stroke();

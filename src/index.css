@@ -45,6 +45,16 @@ main::after {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.7'/%3E%3C/svg%3E");
 }
 
+.jovian {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.jovian canvas {
+  display: block;
+}
+
 .field {
   position: absolute;
   inset: 0;
@@ -53,11 +63,12 @@ main::after {
 }
 
 h1 {
-  position: relative;
+  position: absolute;
   z-index: 1;
   margin: 0;
-  padding: 0 0.08em;
-  transform: translateY(-2%);
+  left: 50%;
+  top: calc(var(--crest, 0.42) * 100% - 3.5rem);
+  transform: translateX(-50%);
   font-family: var(--sans);
   --track: 0.06em;
   font-weight: 400;
