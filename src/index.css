@@ -67,7 +67,7 @@ h1 {
   z-index: 1;
   margin: 0;
   left: 50%;
-  top: calc(var(--crest, 0.42) * 100% - 3.5rem);
+  top: max(1.25rem, calc(var(--crest, 0.42) * 100% - 5.6rem));
   transform: translateX(-50%);
   font-family: var(--sans);
   --track: 0.06em;

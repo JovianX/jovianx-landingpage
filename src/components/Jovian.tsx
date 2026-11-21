@@ -1,156 +1,152 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { planetRadius } from "../layout";
+import { planetRadius, polarSquash } from "../layout";
+
+const TILT = -0.78;
+const LONGITUDE = -0.76;
+// System III, sped up so one Jovian day lasts about two minutes.
+const SPIN = 0.045;
 
 const VERT = `
+  uniform float flatten;
   varying vec3 vNormal;
   varying vec3 vWorld;
   varying vec2 vUv;
   void main() {
-    vUv = uv;
     vec4 world = modelMatrix * vec4(position, 1.0);
     vWorld = world.xyz;
-    vNormal = normalize(mat3(modelMatrix) * normal);
+    vec3 n = mat3(modelMatrix) * normal;
+    n.y /= flatten * flatten;
+    vNormal = normalize(n);
+    vUv = uv;
     gl_Position = projectionMatrix * viewMatrix * world;
   }
 `;
 
 const FRAG = `
   uniform sampler2D map;
-  uniform vec3 lightDir;
+  uniform float time;
+  uniform float spinRate;
   varying vec3 vNormal;
   varying vec3 vWorld;
   varying vec2 vUv;
+
+  const vec2 EYE = vec2(0.3644, 0.3800);
+
+  float hash13(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+  }
+
+  float vnoise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(hash13(i), hash13(i + vec3(1.0, 0.0, 0.0)), f.x),
+          mix(hash13(i + vec3(0.0, 1.0, 0.0)), hash13(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+      mix(mix(hash13(i + vec3(0.0, 0.0, 1.0)), hash13(i + vec3(1.0, 0.0, 1.0)), f.x),
+          mix(hash13(i + vec3(0.0, 1.0, 1.0)), hash13(i + vec3(1.0, 1.0, 1.0)), f.x), f.y),
+      f.z);
+  }
+
+  float cn(float lon, float y, float freq) {
+    float a = lon * 6.28318530718;
+    return vnoise(vec3(cos(a) * freq, y, sin(a) * freq));
+  }
+
+  float jet(float lat, float center, float speed, float width) {
+    float d = (lat - center) / width;
+    return speed * exp(-d * d);
+  }
+
+  // Eastward wind in m/s relative to System III. Cassini-era jets.
+  float eastward(float lat) {
+    return jet(lat, 0.0, 125.0, 6.5)
+      + jet(lat, 18.0, -42.0, 1.7)
+      + jet(lat, 23.0, 140.0, 1.9)
+      + jet(lat, 30.0, -30.0, 1.7)
+      + jet(lat, 36.0, 42.0, 1.8)
+      + jet(lat, 43.0, 25.0, 2.0)
+      + jet(lat, -17.5, -68.0, 1.7)
+      + jet(lat, -23.8, 48.0, 1.5)
+      + jet(lat, -32.0, 36.0, 1.9)
+      + jet(lat, -39.0, -24.0, 1.7)
+      + jet(lat, -47.0, 20.0, 2.2);
+  }
+
+  // Longitude turns per second. Same time scale as the planet's spin.
+  float driftRate(float lat) {
+    float parallel = max(cos(radians(lat)), 0.28);
+    return spinRate * eastward(lat) * 1.266e-5 / parallel;
+  }
+
   void main() {
-    vec3 normal = normalize(vNormal);
+    float latDeg = (vUv.y - 0.5) * 180.0;
+    float lon = vUv.x;
+    float lat = vUv.y;
+    float eyeLat = (EYE.y - 0.5) * 180.0;
+    float eyeShift = driftRate(eyeLat) * time;
+    float eyeLon = fract(EYE.x + eyeShift);
+    vec2 rel = vec2(fract(lon - eyeLon + 0.5) - 0.5, lat - EYE.y);
+    vec2 deg = vec2(rel.x * 360.0, rel.y * 180.0);
+    float radius = length(deg);
+    // Quiet core, fast collar, gone outside the spot. One circuit is five days.
+    float inside = smoothstep(10.5, 6.2, radius);
+    float collar = smoothstep(1.4, 5.2, radius) * inside;
+    float turn = collar * time * spinRate * 0.0827;
+    float cs = cos(turn);
+    float sn = sin(turn);
+    vec2 srcDeg = vec2(cs * deg.x + sn * deg.y, -sn * deg.x + cs * deg.y);
+    vec2 eyeSrc = vec2(EYE.x + srcDeg.x / 360.0, EYE.y + srcDeg.y / 180.0);
+    float drift = driftRate(latDeg) * time;
+    float calm = 1.0 - inside;
+    float billow = cn(lon - drift, lat * 8.0, 2.2);
+    vec2 zonal = vec2(
+      fract(lon - drift + (billow - 0.5) * 0.003 * calm),
+      lat + (billow - 0.5) * 0.004 * calm
+    );
+    float du = fract(eyeSrc.x - zonal.x + 0.5) - 0.5;
+    vec2 uv = vec2(fract(zonal.x + du * inside), mix(zonal.y, eyeSrc.y, inside));
+    vec3 albedo = texture2D(map, uv).rgb;
+    float seam = smoothstep(0.016, 0.0, min(uv.x, 1.0 - uv.x));
+    vec3 across = 0.5 * (
+      texture2D(map, vec2(fract(uv.x + 0.007), uv.y)).rgb +
+      texture2D(map, vec2(fract(uv.x - 0.007), uv.y)).rgb
+    );
+    albedo = mix(albedo, across, seam);
+    vec3 blur = (
+      texture2D(map, uv + vec2(0.0007, 0.0)).rgb +
+      texture2D(map, uv + vec2(-0.0007, 0.0)).rgb +
+      texture2D(map, uv + vec2(0.0, 0.0014)).rgb +
+      texture2D(map, uv + vec2(0.0, -0.0014)).rgb
+    ) * 0.25;
+    albedo = clamp(albedo + (albedo - blur) * 0.4 * (1.0 - seam), 0.0, 1.0);
+    albedo *= vec3(1.04, 0.97, 0.9);
+    albedo = pow(max(albedo, 0.0), vec3(1.04));
+
+    vec3 geometric = normalize(vNormal);
     vec3 viewDir = normalize(cameraPosition - vWorld);
-    float lambert = clamp(dot(normal, normalize(lightDir)), 0.0, 1.0);
-    float facing = clamp(dot(normal, viewDir), 0.0, 1.0);
-    float shade = 0.1 + 0.9 * pow(lambert, 0.8);
-    float limb = mix(0.42, 1.0, pow(facing, 0.8));
-    vec3 tex = texture2D(map, vUv).rgb;
-    vec3 color = tex * shade * mix(0.18, 1.0, limb);
+    float height = dot(albedo, vec3(0.2, 0.71, 0.09));
+    vec3 dpdx = dFdx(vWorld);
+    vec3 dpdy = dFdy(vWorld);
+    vec3 normal = normalize(geometric - 1.35 * (
+      cross(dpdy, geometric) * dFdx(height) + cross(geometric, dpdx) * dFdy(height)
+    ));
+    float facing = clamp(dot(geometric, viewDir), 0.0, 1.0);
+    normal = normalize(mix(geometric, normal, smoothstep(0.02, 0.45, facing)));
+
+    vec3 lightDir = normalize(vec3(-0.28, 0.62, 0.68));
+    float incidence = clamp(dot(normal, lightDir), 0.0, 1.0);
+    float wrap = pow(clamp(incidence * 0.88 + 0.12, 0.0, 1.0), 0.85);
+    float limb = pow(facing, 0.48);
+    vec3 color = albedo * wrap * limb;
+    color *= mix(vec3(0.78, 0.88, 1.06), vec3(1.0), smoothstep(0.0, 0.35, facing));
     gl_FragColor = linearToOutputTexel(vec4(color, 1.0));
   }
 `;
-
-const STOPS: Array<[number, [number, number, number]]> = [
-  [0, [206, 190, 166]],
-  [0.05, [228, 210, 182]],
-  [0.08, [168, 112, 68]],
-  [0.11, [242, 232, 214]],
-  [0.135, [146, 90, 54]],
-  [0.16, [214, 176, 128]],
-  [0.19, [236, 220, 196]],
-  [0.215, [132, 74, 46]],
-  [0.245, [196, 142, 92]],
-  [0.275, [244, 232, 212]],
-  [0.305, [160, 98, 58]],
-  [0.335, [112, 62, 40]],
-  [0.37, [226, 204, 168]],
-  [0.41, [176, 114, 70]],
-  [0.46, [236, 216, 184]],
-  [0.52, [150, 88, 52]],
-  [0.6, [214, 174, 128]],
-  [0.7, [164, 110, 70]],
-  [0.82, [210, 176, 136]],
-  [1, [188, 156, 120]],
-];
-
-function hash(x: number, y: number) {
-  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
-  return n - Math.floor(n);
-}
-
-function noise(x: number, y: number) {
-  const xi = Math.floor(x);
-  const yi = Math.floor(y);
-  const xf = x - xi;
-  const yf = y - yi;
-  const u = xf * xf * (3 - 2 * xf);
-  const v = yf * yf * (3 - 2 * yf);
-  const a = hash(xi, yi);
-  const b = hash(xi + 1, yi);
-  const c = hash(xi, yi + 1);
-  const d = hash(xi + 1, yi + 1);
-  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
-}
-
-function sample(lat: number) {
-  let index = 0;
-  while (index < STOPS.length - 2 && STOPS[index + 1][0] < lat) index += 1;
-  const [start, from] = STOPS[index];
-  const [end, to] = STOPS[index + 1];
-  const t = Math.max(0, Math.min(1, (lat - start) / (end - start)));
-  const sharp = 0.5 + 0.5 * Math.tanh((t - 0.5) * 7);
-  return [
-    from[0] + (to[0] - from[0]) * sharp,
-    from[1] + (to[1] - from[1]) * sharp,
-    from[2] + (to[2] - from[2]) * sharp,
-  ] as const;
-}
-
-function paintJovian() {
-  const width = 1024;
-  const height = 512;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return canvas;
-
-  const image = ctx.createImageData(width, height);
-  const data = image.data;
-  for (let y = 0; y < height; y += 1) {
-    const lat = y / height;
-    for (let x = 0; x < width; x += 1) {
-      const angle = (x / width) * Math.PI * 2;
-      const nx = Math.cos(angle);
-      const nz = Math.sin(angle);
-      const shear = noise(nx * 2.4, lat * 6) * 0.62 + noise(nz * 2.4, lat * 6) * 0.38 - 0.5;
-      const filament =
-        noise(nx * 7.5 + lat * 3, lat * 64) * 0.62 + noise(nz * 7.5, lat * 64) * 0.38 - 0.5;
-      const polar = Math.pow(Math.max(0, 1 - lat * 8), 2);
-      const [r, g, b] = sample(lat + shear * 0.012 * (1 - polar));
-      const grain = (filament * 42 + shear * 16) * (1 - polar);
-      const i = (y * width + x) * 4;
-      data[i] = Math.max(0, Math.min(255, r + grain));
-      data[i + 1] = Math.max(0, Math.min(255, g + grain * 0.82));
-      data[i + 2] = Math.max(0, Math.min(255, b + grain * 0.5));
-      data[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(image, 0, 0);
-  storm(ctx, width * 0.25, height * 0.3, 54, 26, "#9a3a28", "#e2b090");
-  storm(ctx, width * 0.72, height * 0.2, 22, 12, "#f4efe6", "#d2b48a");
-  return canvas;
-}
-
-function storm(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  rx: number,
-  ry: number,
-  core: string,
-  edge: string,
-) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-0.35);
-  ctx.globalCompositeOperation = "soft-light";
-  ctx.globalAlpha = 0.85;
-  const glow = ctx.createRadialGradient(-rx * 0.2, 0, ry * 0.15, 0, 0, rx);
-  glow.addColorStop(0, core);
-  glow.addColorStop(0.7, edge);
-  glow.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = glow;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
 
 function useStill() {
   const [still, setStill] = useState(() =>
@@ -169,53 +165,76 @@ function useStill() {
 
 function Body() {
   const spin = useRef<THREE.Group>(null);
+  const elapsed = useRef(0);
   const still = useStill();
   const viewport = useThree((state) => state.viewport);
   const gl = useThree((state) => state.gl);
-  const texture = useMemo(() => {
-    const map = new THREE.CanvasTexture(paintJovian());
-    map.colorSpace = THREE.SRGBColorSpace;
-    map.anisotropy = gl.capabilities.getMaxAnisotropy();
-    map.generateMipmaps = false;
-    map.minFilter = THREE.LinearFilter;
-    map.magFilter = THREE.LinearFilter;
-    return map;
+  const [texture, setTexture] = useState<THREE.Texture | null>(null);
+
+  useEffect(() => {
+    const loader = new THREE.TextureLoader();
+    let map: THREE.Texture | null = null;
+    let cancel = false;
+    loader.load("/jupiter.jpg", (next) => {
+      if (cancel) {
+        next.dispose();
+        return;
+      }
+      next.colorSpace = THREE.SRGBColorSpace;
+      next.wrapS = THREE.RepeatWrapping;
+      next.anisotropy = gl.capabilities.getMaxAnisotropy();
+      next.minFilter = THREE.LinearMipmapLinearFilter;
+      next.magFilter = THREE.LinearFilter;
+      map = next;
+      setTexture(next);
+    });
+    return () => {
+      cancel = true;
+      map?.dispose();
+    };
   }, [gl]);
-  const material = useMemo(
-    () =>
-      new THREE.ShaderMaterial({
-        uniforms: {
-          map: { value: texture },
-          lightDir: { value: new THREE.Vector3(0.12, 0.92, 0.42).normalize() },
-        },
-        vertexShader: VERT,
-        fragmentShader: FRAG,
-      }),
-    [texture],
-  );
+
+  const surface = useMemo(() => {
+    if (!texture) return null;
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        map: { value: texture },
+        time: { value: 0 },
+        spinRate: { value: SPIN },
+        flatten: { value: polarSquash },
+      },
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      toneMapped: false,
+    });
+  }, [texture]);
 
   useEffect(
     () => () => {
-      texture.dispose();
-      material.dispose();
+      surface?.dispose();
     },
-    [texture, material],
+    [surface],
   );
 
   useFrame((_, delta) => {
+    if (surface) surface.uniforms.time.value = elapsed.current;
     if (still || !spin.current) return;
-    spin.current.rotation.y += delta * 0.045;
+    elapsed.current += delta;
+    spin.current.rotation.y += delta * SPIN;
   });
 
   const radius = planetRadius(viewport.width, viewport.height);
   const y = -viewport.height / 2;
+  if (!surface) return null;
 
   return (
-    <group position={[0, y, 0]}>
-      <group ref={spin} rotation={[0.04, 0.15, 0]}>
-        <mesh material={material}>
-          <sphereGeometry args={[radius, 160, 120]} />
-        </mesh>
+    <group position={[0, y, 0]} scale={[1, polarSquash, 1]}>
+      <group rotation={[TILT, 0, 0]}>
+        <group ref={spin} rotation={[0, LONGITUDE, 0]}>
+          <mesh material={surface}>
+            <sphereGeometry args={[radius, 192, 144]} />
+          </mesh>
+        </group>
       </group>
     </group>
   );
@@ -226,7 +245,7 @@ export function Jovian() {
     <div className="jovian" aria-hidden="true">
       <Canvas
         camera={{ position: [0, 0.1, 11], fov: 30 }}
-        dpr={[1, 1.75]}
+        dpr={[1, 2]}
         gl={{ alpha: true, antialias: true }}
       >
         <Body />
