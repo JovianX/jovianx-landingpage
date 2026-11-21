@@ -70,12 +70,14 @@ function draw(
   ring(ctx, pcx, pcy, radius * 1.24, radius * 0.8, 0.16, -turn * 0.62, 0.08, false);
 
   if (still) return;
-  const age = (now - born) / 1000;
+  const age = Math.max(0, (now - born) / 1000);
   if (age < 2.1) {
     const progress = age / 2.1;
     const eased = 1 - (1 - progress) ** 3;
+    const pulse = eased * Math.min(width, height) * 0.3;
+    if (pulse <= 0) return;
     ctx.beginPath();
-    ctx.arc(pcx, crest, eased * Math.min(width, height) * 0.3, 0, Math.PI * 2);
+    ctx.arc(pcx, crest, pulse, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(255, 248, 236, ${0.7 * (1 - progress)})`;
     ctx.lineWidth = 1.4;
     ctx.stroke();
@@ -93,13 +95,14 @@ export function Field() {
     if (!ctx) return;
 
     const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const born = performance.now();
+    let born = Number.POSITIVE_INFINITY;
     let frame = 0;
 
     const paint = (now: number) => {
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       if (width === 0 || height === 0) return;
+      born = Math.min(born, now);
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const nextWidth = Math.round(width * dpr);
       const nextHeight = Math.round(height * dpr);
